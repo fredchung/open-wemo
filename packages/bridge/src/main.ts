@@ -3,7 +3,7 @@ import { platform } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getAppDataDir, getDatabase } from "./db";
 import { handleAutoInstall } from "./install";
-import { type ServerInstance, startServer } from "./server";
+import { type ServerInstance, getLocalIpAddress, startServer } from "./server";
 import { getSavedAutostartPreference, setAutostart, syncAutostart } from "./tray/autostart";
 import { type AppTray, createTray } from "./tray/index";
 import {
@@ -13,6 +13,7 @@ import {
   getServerUrl,
   openInBrowser,
 } from "./tray/menu";
+import { getPreferredIp } from "./tray/qr-window";
 import { shouldShowWelcome } from "./tray/welcome";
 import { discoverDevices } from "./wemo/discovery";
 import { startKeepAlive } from "./wemo/keepalive";
@@ -20,6 +21,7 @@ import { loadDeviceRules, startScheduler } from "./wemo/scheduler";
 
 /** Default server port (51515 chosen to avoid conflicts with common dev servers) */
 const DEFAULT_PORT = 51515;
+const DEFAULT_HOST = "0.0.0.0";
 
 /** Application state */
 interface AppState {
@@ -29,6 +31,9 @@ interface AppState {
   startOnLogin: boolean;
   scheduler: { stop: () => void } | null;
   keepAlive: { stop: () => void } | null;
+  isHeadless: boolean;
+  port: number;
+  host: string;
 }
 
 const state: AppState = {
@@ -38,15 +43,19 @@ const state: AppState = {
   startOnLogin: false,
   scheduler: null,
   keepAlive: null,
+  isHeadless: false,
+  port: DEFAULT_PORT,
+  host: DEFAULT_HOST,
 };
 
 /**
  * Checks if the port is available.
  */
-async function isPortAvailable(port: number): Promise<boolean> {
+async function isPortAvailable(port: number, host = "0.0.0.0"): Promise<boolean> {
   try {
     const server = Bun.serve({
       port,
+      hostname: host,
       fetch: () => new Response("test"),
     });
     server.stop();
@@ -61,23 +70,26 @@ async function isPortAvailable(port: number): Promise<boolean> {
  */
 async function initialize(): Promise<void> {
   console.log("[Main] Open Wemo Bridge starting...");
-  console.log(`[Main] Platform: ${platform()}`);
+  console.log(`[Main] Platform: ${platform()} (${process.arch})`);
   console.log(`[Main] Node version: ${process.version}`);
   console.log(`[Main] Bun version: ${Bun.version}`);
+  if (state.isHeadless) {
+    console.log("[Main] Mode: Headless (system tray and browser popups disabled)");
+  }
 
   // Check if port is available
-  const portAvailable = await isPortAvailable(DEFAULT_PORT);
+  const portAvailable = await isPortAvailable(state.port, state.host);
   if (!portAvailable) {
-    console.error(`[Main] Port ${DEFAULT_PORT} is already in use!`);
+    console.error(`[Main] Port ${state.port} is already in use!`);
     console.error("[Main] Another instance of Open Wemo may be running.");
-    console.error("[Main] Please close it and try again.");
+    console.error("[Main] Please close it or specify another port with --port <number>.");
 
-    // Try to show a notification on supported platforms
-    if (platform() === "darwin") {
+    // Try to show a notification on supported desktop platforms
+    if (!state.isHeadless && platform() === "darwin") {
       Bun.spawn([
         "osascript",
         "-e",
-        `display notification "Port ${DEFAULT_PORT} is already in use. Another instance may be running." with title "Open Wemo"`,
+        `display notification "Port ${state.port} is already in use. Another instance may be running." with title "Open Wemo"`,
       ]);
     }
 
@@ -94,8 +106,10 @@ async function initialize(): Promise<void> {
     state.startOnLogin = getSavedAutostartPreference();
     console.log(`[Main] Auto-start on login: ${state.startOnLogin}`);
 
-    // Sync auto-start setting with system
-    await syncAutostart();
+    // Sync auto-start setting with system (only in desktop mode)
+    if (!state.isHeadless) {
+      await syncAutostart();
+    }
   } catch (error) {
     console.error("[Main] Failed to initialize database:", error);
     throw error;
@@ -104,21 +118,25 @@ async function initialize(): Promise<void> {
   // Step 2: Start HTTP server
   console.log("[Main] Starting HTTP server...");
   try {
-    state.server = await startServer({ port: DEFAULT_PORT });
+    state.server = await startServer({ port: state.port, host: state.host });
     console.log(`[Main] Server running at ${state.server.url}`);
   } catch (error) {
     console.error("[Main] Failed to start server:", error);
     throw error;
   }
 
-  // Step 3: Create system tray
-  console.log("[Main] Creating system tray...");
-  try {
-    await createSystemTray();
-    console.log("[Main] System tray created");
-  } catch (error) {
-    console.error("[Main] Failed to create system tray:", error);
-    // Continue anyway - tray is not critical
+  // Step 3: Create system tray (skipped in headless mode)
+  if (state.isHeadless) {
+    console.log("[Main] Skipping system tray in headless mode");
+  } else {
+    console.log("[Main] Creating system tray...");
+    try {
+      await createSystemTray();
+      console.log("[Main] System tray created");
+    } catch (error) {
+      console.error("[Main] Failed to create system tray:", error);
+      // Continue anyway - tray is not critical
+    }
   }
 
   // Step 4: Run initial device discovery (background)
@@ -137,14 +155,26 @@ async function initialize(): Promise<void> {
   // Step 6: Start keep-alive service for Insight devices with low-power loads
   state.keepAlive = startKeepAlive();
 
-  // Step 6: Show first-launch setup if needed
+  const localUrl = `http://localhost:${state.port}`;
+  const lanIp = getPreferredIp() || getLocalIpAddress();
+  const lanUrl = lanIp ? `http://${lanIp}:${state.port}` : null;
+
+  // Step 7: Show first-launch setup if needed
   if (shouldShowWelcome()) {
-    console.log("[Main] First launch detected, opening device setup page...");
-    openInBrowser(`${getServerUrl(DEFAULT_PORT)}/setup`);
+    if (state.isHeadless) {
+      console.log("[Main] First launch detected!");
+      console.log(`[Main] Configure devices at: ${lanUrl ? `${lanUrl}/setup` : `${localUrl}/setup`}`);
+    } else {
+      console.log("[Main] First launch detected, opening device setup page...");
+      openInBrowser(`${localUrl}/setup`);
+    }
   }
 
   console.log("[Main] Open Wemo Bridge is ready!");
-  console.log(`[Main] Access the app at: ${getServerUrl(DEFAULT_PORT)}`);
+  console.log(`[Main] Local URL:   ${localUrl}`);
+  if (lanUrl) {
+    console.log(`[Main] Network URL: ${lanUrl}`);
+  }
 }
 
 /**
@@ -368,11 +398,18 @@ function setupErrorHandlers(): void {
 
 // ==================== CLI Arguments ====================
 
+export interface CliResult {
+  shouldExit: boolean;
+  headless: boolean;
+  port: number;
+  host: string;
+  noInstall: boolean;
+}
+
 /**
  * Parse and handle CLI arguments.
- * Returns true if the app should continue running, false if it should exit.
  */
-function handleCliArgs(): boolean {
+function parseCliArgs(): CliResult {
   const args = process.argv.slice(2);
 
   // --help
@@ -384,17 +421,55 @@ Usage: open-wemo [options]
 
 Options:
   --help, -h              Show this help message
+  --headless, -H          Run in headless mode (system tray and browser popups disabled)
+  --port, -p <number>     Port to listen on (default: 51515, or PORT env)
+  --host <address>        Host address to bind to (default: 0.0.0.0, or HOST env)
+  --no-install            Run in place without auto-installing to ~/.local/bin or AppData
+  --generate-service      Output a systemd service unit file for headless/Raspberry Pi setup
   --reset-first-launch    Reset first-launch flag (triggers setup wizard on next start)
   --reset-db              Delete database and start fresh (removes all devices and settings)
   --version, -v           Show version information
 `);
-    return false;
+    return { shouldExit: true, headless: false, port: DEFAULT_PORT, host: DEFAULT_HOST, noInstall: false };
   }
 
   // --version
   if (args.includes("--version") || args.includes("-v")) {
-    console.log("Open Wemo Bridge v0.3.0");
-    return false;
+    console.log("Open Wemo Bridge v0.4.1");
+    return { shouldExit: true, headless: false, port: DEFAULT_PORT, host: DEFAULT_HOST, noInstall: false };
+  }
+
+  // --generate-service
+  if (args.includes("--generate-service")) {
+    const isCompiled = import.meta.dir.includes("~BUN") || import.meta.dir.startsWith("$bunfs");
+    const execPath = isCompiled ? process.execPath : "open-wemo";
+    console.log(`[Unit]
+Description=Open Wemo Bridge - WeMo Device Controller
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${execPath} --headless
+Restart=on-failure
+RestartSec=5s
+Environment=NODE_ENV=production
+
+# Install as systemd service:
+# User service:
+#   mkdir -p ~/.config/systemd/user
+#   open-wemo --generate-service > ~/.config/systemd/user/open-wemo.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now open-wemo
+# System service:
+#   sudo open-wemo --generate-service > /etc/systemd/system/open-wemo.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now open-wemo
+
+[Install]
+WantedBy=default.target
+`);
+    return { shouldExit: true, headless: false, port: DEFAULT_PORT, host: DEFAULT_HOST, noInstall: false };
   }
 
   // --reset-first-launch
@@ -408,7 +483,7 @@ Options:
     } catch (error) {
       console.error("[CLI] Failed to reset flag:", error);
     }
-    return false;
+    return { shouldExit: true, headless: false, port: DEFAULT_PORT, host: DEFAULT_HOST, noInstall: false };
   }
 
   // --reset-db
@@ -439,25 +514,76 @@ Options:
     } catch (error) {
       console.error("[CLI] Failed to delete database:", error);
     }
-    return false;
+    return { shouldExit: true, headless: false, port: DEFAULT_PORT, host: DEFAULT_HOST, noInstall: false };
   }
 
-  return true;
+  // Parse port
+  let port = DEFAULT_PORT;
+  if (process.env.PORT) {
+    const envPort = Number.parseInt(process.env.PORT, 10);
+    if (!Number.isNaN(envPort) && envPort > 0) port = envPort;
+  }
+  const portIdx = args.findIndex((arg) => arg === "--port" || arg === "-p");
+  if (portIdx !== -1 && args[portIdx + 1]) {
+    const parsedPort = Number.parseInt(args[portIdx + 1], 10);
+    if (!Number.isNaN(parsedPort) && parsedPort > 0) {
+      port = parsedPort;
+    } else {
+      console.warn(`[CLI] Invalid port '${args[portIdx + 1]}', using default: ${port}`);
+    }
+  }
+
+  // Parse host
+  let host = process.env.HOST || DEFAULT_HOST;
+  const hostIdx = args.indexOf("--host");
+  if (hostIdx !== -1 && args[hostIdx + 1]) {
+    host = args[hostIdx + 1];
+  }
+
+  // Parse headless
+  let headless = false;
+  if (args.includes("--headless") || args.includes("-H")) {
+    headless = true;
+  } else if (process.env.HEADLESS === "1" || process.env.HEADLESS === "true") {
+    headless = true;
+  } else if (process.env.OPEN_WEMO_HEADLESS === "1" || process.env.OPEN_WEMO_HEADLESS === "true") {
+    headless = true;
+  } else if (platform() === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    // Auto-detect Linux headless environment (e.g. Raspberry Pi OS Lite, SSH session, systemd)
+    headless = true;
+  }
+
+  // Parse no-install (default to true in headless mode so systemd / terminal runs are not backgrounded)
+  const noInstall = args.includes("--no-install") || process.env.NO_AUTO_INSTALL === "1" || headless;
+
+  return {
+    shouldExit: false,
+    headless,
+    port,
+    host,
+    noInstall,
+  };
 }
 
 // ==================== Application Entry ====================
 
 // Handle CLI arguments first
-if (!handleCliArgs()) {
+const cliOptions = parseCliArgs();
+if (cliOptions.shouldExit) {
   process.exit(0);
 }
+
+// Apply CLI options to application state
+state.isHeadless = cliOptions.headless;
+state.port = cliOptions.port;
+state.host = cliOptions.host;
 
 // Set up error handlers first
 setupErrorHandlers();
 
-// Handle auto-install (copies exe to AppData and relaunches if needed)
+// Handle auto-install (copies exe to AppData/bin and relaunches if needed)
 // This must run before initialize() so the installed version takes over
-if (!handleAutoInstall()) {
+if (!handleAutoInstall({ noInstall: cliOptions.noInstall })) {
   // Installed version was launched, exit this instance
   process.exit(0);
 }

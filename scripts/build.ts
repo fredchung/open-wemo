@@ -8,7 +8,7 @@
  * Usage:
  *   bun scripts/build.ts [platform]
  *
- * Platforms: windows, mac, mac-intel, linux, all
+ * Platforms: windows, mac, mac-intel, linux, linux-arm64 (or rpi), all
  */
 
 import { createHash } from "node:crypto";
@@ -121,6 +121,11 @@ const PLATFORMS: Record<string, PlatformConfig> = {
     target: "bun-linux-x64",
     outputName: `open-wemo-${VERSION}-linux`,
     archiveName: `open-wemo-${VERSION}-linux-x64.zip`,
+  },
+  "linux-arm64": {
+    target: "bun-linux-arm64",
+    outputName: `open-wemo-${VERSION}-linux-arm64`,
+    archiveName: `open-wemo-${VERSION}-linux-arm64.zip`,
   },
 };
 
@@ -275,11 +280,13 @@ let targetPlatforms: string[];
 if (args.length === 0 || args[0] === "all") {
   targetPlatforms = Object.keys(PLATFORMS);
 } else {
-  targetPlatforms = args.filter((arg) => PLATFORMS[arg]);
+  targetPlatforms = args
+    .map((arg) => (arg === "rpi" ? "linux-arm64" : arg))
+    .filter((arg) => PLATFORMS[arg]);
 
   if (targetPlatforms.length === 0) {
     console.error("❌ No valid platforms specified");
-    console.error("Available platforms:", Object.keys(PLATFORMS).join(", "));
+    console.error("Available platforms:", [...Object.keys(PLATFORMS), "rpi"].join(", "));
     process.exit(1);
   }
 }

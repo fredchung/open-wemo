@@ -12,6 +12,8 @@
     "build:mac": "bun scripts/build.ts mac",
     "build:mac-intel": "bun scripts/build.ts mac-intel",
     "build:linux": "bun scripts/build.ts linux",
+    "build:linux-arm64": "bun scripts/build.ts linux-arm64",
+    "build:rpi": "bun scripts/build.ts linux-arm64",
     "build:all": "bun scripts/build.ts all",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "biome check .",

@@ -99,8 +99,8 @@ function scoreInterfaceName(name: string): number {
     return 100;
   }
 
-  // Ethernet - usually primary on desktops
-  if (/^ethernet$|^eth\d|^en\d/i.test(lowerName)) {
+  // Ethernet - usually primary on desktops and SBCs like Raspberry Pi (eth0, end0, enp*, en*)
+  if (/^ethernet$|^eth|^end|^en/i.test(lowerName)) {
     return 80;
   }
 

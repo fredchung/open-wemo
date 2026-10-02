@@ -1,0 +1,22 @@
+[Unit]
+Description=Open Wemo Bridge - WeMo Device Controller
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# By default, runs the executable in headless mode.
+# If installed using open-wemo's auto-install:
+# ExecStart=%h/.local/bin/open-wemo --headless
+# Or if installed globally (e.g. /usr/local/bin):
+ExecStart=/usr/local/bin/open-wemo --headless
+Restart=on-failure
+RestartSec=5s
+Environment=NODE_ENV=production
+
+# Optional custom port or host:
+# Environment=PORT=51515
+# Environment=HOST=0.0.0.0
+
+[Install]
+WantedBy=default.target

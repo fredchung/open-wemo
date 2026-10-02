@@ -232,6 +232,8 @@ function generateDebugInstallPage(platform: "android" | "ios"): string {
 export interface ServerConfig {
   /** Port to listen on (default: 51515) */
   port?: number;
+  /** Host to listen on (default: 0.0.0.0) */
+  host?: string;
   /** Path to static files directory (default: ../web) */
   staticDir?: string;
   /** Enable request logging (default: true) */
@@ -243,6 +245,7 @@ export interface ServerConfig {
  */
 const DEFAULT_CONFIG: Required<ServerConfig> = {
   port: 51515,
+  host: "0.0.0.0",
   staticDir: "../web",
   enableLogging: true,
 };
@@ -283,7 +286,7 @@ export function createApp(config: ServerConfig = {}): Hono {
   // Server info endpoint (returns LAN IP for QR code generation)
   app.get("/api/info", (c) => {
     const ip = getPreferredIp();
-    const port = DEFAULT_CONFIG.port;
+    const port = config.port ?? DEFAULT_CONFIG.port;
     return c.json({
       ip,
       port,
@@ -448,7 +451,7 @@ export interface ServerInstance {
  * @returns Server instance with stop method
  */
 export async function startServer(config: ServerConfig = {}): Promise<ServerInstance> {
-  const { port } = { ...DEFAULT_CONFIG, ...config };
+  const { port, host } = { ...DEFAULT_CONFIG, ...config };
 
   // Initialize static files (loads and caches all web assets)
   await initStaticFiles();
@@ -461,12 +464,13 @@ export async function startServer(config: ServerConfig = {}): Promise<ServerInst
 
   const server = Bun.serve({
     port,
-    hostname: "0.0.0.0", // Bind to all interfaces for LAN access
+    hostname: host || "0.0.0.0", // Bind to all interfaces for LAN access (or specified host)
     fetch: app.fetch,
     idleTimeout: 30, // Allow longer requests (discovery can take 10-15s)
   });
 
-  console.log(`[Server] Started on http://localhost:${server.port}`);
+  const displayHost = host === "0.0.0.0" ? "localhost" : host;
+  console.log(`[Server] Started on http://${displayHost}:${server.port}`);
 
   const stop = async (): Promise<void> => {
     console.log("[Server] Shutting down...");
@@ -474,21 +478,12 @@ export async function startServer(config: ServerConfig = {}): Promise<ServerInst
     console.log("[Server] Stopped");
   };
 
-  // Handle graceful shutdown
-  const shutdownHandler = async () => {
-    await stop();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", shutdownHandler);
-  process.on("SIGTERM", shutdownHandler);
-
   return {
     server,
     app,
     stop,
     port: server.port ?? port,
-    url: `http://localhost:${server.port ?? port}`,
+    url: `http://${displayHost}:${server.port ?? port}`,
   };
 }
 

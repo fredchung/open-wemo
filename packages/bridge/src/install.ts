@@ -159,7 +159,7 @@ export function installExecutable(): string | null {
  * Launches the installed executable and returns true if successful.
  * The current process should exit after calling this.
  */
-export function launchInstalled(): boolean {
+export function launchInstalled(args: string[] = process.argv.slice(2)): boolean {
   const installedPath = getInstalledExePath();
 
   if (!existsSync(installedPath)) {
@@ -173,12 +173,16 @@ export function launchInstalled(): boolean {
     if (platform() === "win32") {
       // On Windows, use PowerShell Start-Process for proper detached launch
       // -WindowStyle Hidden ensures no console window, even though we patched the exe
-      const psCommand = `Start-Process -FilePath '${installedPath.replace(/'/g, "''")}'`;
+      const escapedArgs = args.map((arg) => `'${arg.replace(/'/g, "''")}'`).join(", ");
+      const psCommand =
+        args.length > 0
+          ? `Start-Process -FilePath '${installedPath.replace(/'/g, "''")}' -ArgumentList ${escapedArgs}`
+          : `Start-Process -FilePath '${installedPath.replace(/'/g, "''")}'`;
       console.log(`[Install] PowerShell command: ${psCommand}`);
       Bun.spawnSync(["powershell", "-Command", psCommand]);
     } else {
       // On Unix, spawn detached
-      const subprocess = Bun.spawn([installedPath], {
+      const subprocess = Bun.spawn([installedPath, ...args], {
         stdout: "ignore",
         stderr: "ignore",
         stdin: "ignore",
@@ -194,11 +198,26 @@ export function launchInstalled(): boolean {
 }
 
 /**
+ * Options for auto-install flow.
+ */
+export interface AutoInstallOptions {
+  /** If true, skip auto-installation and keep running in place */
+  noInstall?: boolean;
+  /** CLI arguments to pass to the launched binary */
+  args?: string[];
+}
+
+/**
  * Main install flow - call this at app startup.
  * Returns true if the app should continue running, false if it should exit
  * (because the installed version was launched instead).
  */
-export function handleAutoInstall(): boolean {
+export function handleAutoInstall(options: AutoInstallOptions = {}): boolean {
+  if (options.noInstall || process.env.NO_AUTO_INSTALL) {
+    console.log("[Install] Skipping auto-install (--no-install / headless active)");
+    return true;
+  }
+
   // Skip in dev mode
   if (!isCompiledBinary()) {
     return true;
@@ -219,8 +238,9 @@ export function handleAutoInstall(): boolean {
     return true;
   }
 
-  // Launch the installed version
-  if (launchInstalled()) {
+  // Launch the installed version with forwarded CLI arguments
+  const argsToPass = options.args ?? process.argv.slice(2);
+  if (launchInstalled(argsToPass)) {
     console.log("[Install] Installed version launched, exiting...");
     return false; // Signal to exit
   }

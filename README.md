@@ -145,18 +145,73 @@ Download the latest release for your platform from the [Releases page](https://g
 | Windows | `open-wemo-win.exe` | Windows 10/11 (64-bit) |
 | macOS (Apple Silicon) | `open-wemo-mac` | M1/M2/M3 Macs |
 | macOS (Intel) | `open-wemo-mac-intel` | Older Intel Macs |
-| Linux | `open-wemo-linux` | Ubuntu, Debian, Fedora, etc. |
+| Linux (x86_64) | `open-wemo-linux` | Ubuntu, Debian, Fedora, etc. |
+| Linux (ARM64 / Raspberry Pi) | `open-wemo-linux-arm64` | Raspberry Pi 3/4/5, Zero 2W, ARM64 |
 
 **Run it:**
 - **Windows**: Double-click the `.exe` file. If Windows Defender warns you, click "More info" → "Run anyway" (the app is safe, just not signed yet). On first run, it automatically installs itself to `%LOCALAPPDATA%\Open Wemo`.
 - **macOS**: Right-click and select "Open" the first time (bypasses Gatekeeper). You may need to allow it in System Preferences → Security.
-- **Linux**: Make it executable (`chmod +x open-wemo-linux`) and run it.
+- **Linux (Desktop)**: Make it executable (`chmod +x open-wemo-linux`) and run it.
+- **Raspberry Pi / Headless Linux**: Make it executable and run with `--headless`:
+  ```bash
+  chmod +x open-wemo-linux-arm64
+  ./open-wemo-linux-arm64 --headless
+  ```
+  *(Headless mode is also auto-detected when running without an X11/Wayland display server)*.
 
 **What happens:**
-1. The app automatically installs itself to a permanent location (Windows: AppData, macOS: ~/Applications, Linux: ~/.local/bin)
-2. A small icon appears in your system tray (taskbar on Windows, menu bar on macOS)
-3. A welcome window opens with a QR code for phone setup
+1. The app automatically installs itself to a permanent location (Windows: AppData, macOS: ~/Applications, Linux Desktop: ~/.local/bin)
+2. On desktop systems, a small icon appears in your system tray and a welcome window opens with a QR code
+3. On headless systems (like a Raspberry Pi), system tray and browser popups are bypassed, and network URLs (`http://<pi-ip>:51515`) are printed to the terminal
 4. The bridge starts discovering WeMo devices automatically
+
+---
+
+### Running Headlessly on Raspberry Pi (24/7 Service)
+
+For an always-on setup on a Raspberry Pi, run Open Wemo as a systemd background service:
+
+#### Quick Systemd Setup
+
+1. Copy `open-wemo-linux-arm64` to your Raspberry Pi:
+   ```bash
+   chmod +x open-wemo-linux-arm64
+   mkdir -p ~/.local/bin
+   cp open-wemo-linux-arm64 ~/.local/bin/open-wemo
+   ```
+
+2. Generate and enable the systemd service:
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   ~/.local/bin/open-wemo --generate-service > ~/.config/systemd/user/open-wemo.service
+   systemctl --user daemon-reload
+   systemctl --user enable --now open-wemo
+   ```
+
+3. Enable linger so the service continues running after logging out:
+   ```bash
+   loginctl enable-linger $USER
+   ```
+
+4. Check the service status and logs:
+   ```bash
+   systemctl --user status open-wemo
+   journalctl --user -u open-wemo -f
+   ```
+
+#### CLI Options
+
+| Flag | Description |
+|------|-------------|
+| `--headless`, `-H` | Run in headless mode (disables system tray and browser popups) |
+| `--port`, `-p <port>` | Custom HTTP port to listen on (default: `51515`, or `PORT` env var) |
+| `--host <address>` | Host address to bind to (default: `0.0.0.0`, or `HOST` env var) |
+| `--no-install` | Run in place without auto-installing (automatically set in headless mode) |
+| `--generate-service` | Output a systemd service unit file configured for the current binary |
+| `--reset-first-launch` | Reset first-launch flag (re-enables first-launch setup prompts) |
+| `--reset-db` | Reset database and remove all devices and settings |
+| `--version`, `-v` | Display version information |
+| `--help`, `-h` | Show help message |
 
 ### Step 2: Install the Phone App
 
